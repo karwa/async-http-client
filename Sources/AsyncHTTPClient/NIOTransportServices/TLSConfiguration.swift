@@ -14,7 +14,7 @@
 
 #if canImport(Network)
 
-    import Foundation
+    import Dispatch
     import Network
     import NIOSSL
     import NIOTransportServices

@@ -12,7 +12,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Foundation
 #if canImport(Network)
     import Network
 #endif
@@ -21,18 +20,7 @@ import NIOHTTP1
 import NIOHTTPCompression
 import NIOSSL
 import NIOTransportServices
-
-internal extension String {
-    var isIPAddress: Bool {
-        var ipv4Addr = in_addr()
-        var ipv6Addr = in6_addr()
-
-        return self.withCString { ptr in
-            inet_pton(AF_INET, ptr, &ipv4Addr) == 1 ||
-                inet_pton(AF_INET6, ptr, &ipv6Addr) == 1
-        }
-    }
-}
+import WebURL
 
 public final class HTTPClientCopyingDelegate: HTTPClientResponseDelegate {
     public typealias Response = Void
@@ -52,9 +40,25 @@ public final class HTTPClientCopyingDelegate: HTTPClientResponseDelegate {
     }
 }
 
+extension WebURL.Host {
+  
+  /// Returns the hostname, except if the host is empty or an IP address.
+  ///
+  func hostnameIfSupportsTLS() -> String? {
+        switch self {
+        case .domain(let domain):
+          return domain
+        case .opaque(_):
+          return self.serialized.percentUnescaped
+        default:
+          return nil
+        }
+  }
+}
+
 extension ClientBootstrap {
     fileprivate func makeClientTCPBootstrap(
-        host: String,
+        host: WebURL.Host,
         requiresTLS: Bool,
         configuration: HTTPClient.Configuration
     ) throws -> NIOClientTCPBootstrap {
@@ -64,7 +68,7 @@ extension ClientBootstrap {
         } else {
             let tlsConfiguration = configuration.tlsConfiguration ?? TLSConfiguration.forClient()
             let sslContext = try NIOSSLContext(configuration: tlsConfiguration)
-            let hostname = (!requiresTLS || host.isIPAddress || host.isEmpty) ? nil : host
+            let hostname = requiresTLS ? host.hostnameIfSupportsTLS() : nil
             let tlsProvider = try NIOSSLClientTLSProvider<ClientBootstrap>(context: sslContext, serverHostname: hostname)
             return NIOClientTCPBootstrap(self, tls: tlsProvider)
         }
@@ -75,7 +79,7 @@ extension NIOClientTCPBootstrap {
     /// create a TCP Bootstrap based off what type of `EventLoop` has been passed to the function.
     fileprivate static func makeBootstrap(
         on eventLoop: EventLoop,
-        host: String,
+        host: WebURL.Host,
         requiresTLS: Bool,
         configuration: HTTPClient.Configuration
     ) throws -> NIOClientTCPBootstrap {
@@ -120,7 +124,7 @@ extension NIOClientTCPBootstrap {
 
     static func makeHTTPClientBootstrapBase(
         on eventLoop: EventLoop,
-        host: String,
+        host: WebURL.Host,
         port: Int,
         requiresTLS: Bool,
         configuration: HTTPClient.Configuration
@@ -156,7 +160,7 @@ extension NIOClientTCPBootstrap {
         switch key.scheme {
         case .http, .https:
             let address = HTTPClient.resolveAddress(host: key.host, port: key.port, proxy: configuration.proxy)
-            channel = bootstrap.connect(host: address.host, port: address.port)
+            channel = bootstrap.connect(to: address.host, port: address.port)
         case .unix, .http_unix, .https_unix:
             channel = bootstrap.connect(unixDomainSocketPath: key.unixPath)
         }

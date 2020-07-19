@@ -12,7 +12,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Foundation
 import Logging
 import NIO
 import NIOConcurrencyHelpers
@@ -20,6 +19,8 @@ import NIOFoundationCompat
 import NIOHTTP1
 import NIOHTTPCompression
 import NIOSSL
+import WebURL
+import struct Foundation.Data
 
 extension HTTPClient {
     /// Represent request body.
@@ -75,11 +76,11 @@ extension HTTPClient {
         ///
         /// - parameters:
         ///     - data: Body `Data` representation.
-        public static func data(_ data: Data) -> Body {
-            return Body(length: data.count) { writer in
-                writer.write(.byteBuffer(ByteBuffer(bytes: data)))
-            }
-        }
+//        public static func data(_ data: Data) -> Body {
+//            return Body(length: data.count) { writer in
+//                writer.write(.byteBuffer(ByteBuffer(bytes: data)))
+//            }
+//        }
 
         /// Create and stream body using `String`.
         ///
@@ -96,71 +97,52 @@ extension HTTPClient {
     public struct Request {
         /// Represent kind of Request
         enum Kind: Equatable {
-            enum UnixScheme: Equatable {
-                case baseURL
-                case http_unix
-                case https_unix
-            }
-
+          
             /// Remote host request.
             case host
             /// UNIX Domain Socket HTTP request.
-            case unixSocket(_ scheme: UnixScheme)
+            case unixSocket
 
-            private static var hostRestrictedSchemes: Set = ["http", "https"]
-            private static var allSupportedSchemes: Set = ["http", "https", "unix", "http+unix", "https+unix"]
+            private static var hostRestrictedSchemes: Set<WebURL.Scheme> = [.http, .https]
+            private static var allSupportedSchemes: Set<WebURL.Scheme> = [
+              .http, .https, .other("unix"), .other("http+unix"), .other("https+unix")
+            ]
 
-            init(forScheme scheme: String) throws {
-                switch scheme {
-                case "http", "https": self = .host
-                case "unix": self = .unixSocket(.baseURL)
-                case "http+unix": self = .unixSocket(.http_unix)
-                case "https+unix": self = .unixSocket(.https_unix)
-                default:
-                    throw HTTPClientError.unsupportedScheme(scheme)
+            init(forScheme scheme: WebURL.Scheme) throws {
+               switch scheme {
+                case .http, .https: self = .host
+                case .other("unix"): self = .unixSocket
+                case .other("http+unix"): self = .unixSocket
+                case .other("https+unix"): self = .unixSocket
+                default: throw HTTPClientError.unsupportedScheme(scheme.rawValue)
                 }
             }
 
-            func hostFromURL(_ url: URL) throws -> String {
+            func hostFromURL(_ url: WebURL) throws -> String {
                 switch self {
                 case .host:
-                    guard let host = url.host else {
+                    guard (url.hostObject ?? .empty) != .empty else {
                         throw HTTPClientError.emptyHost
                     }
-                    return host
+                    return url.hostname
                 case .unixSocket:
                     return ""
                 }
             }
 
-            func socketPathFromURL(_ url: URL) throws -> String {
+            func socketPathFromURL(_ url: WebURL) throws -> String {
                 switch self {
-                case .unixSocket(.baseURL):
-                    return url.baseURL?.path ?? url.path
                 case .unixSocket:
-                    guard let socketPath = url.host else {
-                        throw HTTPClientError.missingSocketPath
-                    }
-                    return socketPath
+                  guard let hostname = url.hostObject?.serialized.percentUnescaped else {
+                      throw HTTPClientError.missingSocketPath
+                  }
+                  return hostname
                 case .host:
                     return ""
                 }
             }
 
-            func uriFromURL(_ url: URL) -> String {
-                switch self {
-                case .host:
-                    return url.uri
-                case .unixSocket(.baseURL):
-                    return url.baseURL != nil ? url.uri : "/"
-                case .unixSocket:
-                    return url.uri
-                }
-            }
-
-            func supportsRedirects(to scheme: String?) -> Bool {
-                guard let scheme = scheme?.lowercased() else { return false }
-
+            func supportsRedirects(to scheme: WebURL.Scheme) -> Bool {
                 switch self {
                 case .host:
                     return Kind.hostRestrictedSchemes.contains(scheme)
@@ -173,9 +155,7 @@ extension HTTPClient {
         /// Request HTTP method, defaults to `GET`.
         public let method: HTTPMethod
         /// Remote URL.
-        public let url: URL
-        /// Remote HTTP scheme, resolved from `URL`.
-        public let scheme: String
+        public let url: WebURL
         /// Remote host, resolved from `URL`.
         public let host: String
         /// Socket path, resolved from `URL`.
@@ -189,7 +169,7 @@ extension HTTPClient {
 
         struct RedirectState {
             var count: Int
-            var visited: Set<URL>?
+            var visited: Set<WebURL>?
         }
 
         var redirectState: RedirectState?
@@ -209,7 +189,7 @@ extension HTTPClient {
         ///     - `unsupportedScheme` if URL does contains unsupported HTTP scheme.
         ///     - `emptyHost` if URL does not contains a host.
         public init(url: String, method: HTTPMethod = .GET, headers: HTTPHeaders = HTTPHeaders(), body: Body? = nil) throws {
-            guard let url = URL(string: url) else {
+            guard let url = WebURL(url) else {
                 throw HTTPClientError.invalidURL
             }
 
@@ -228,32 +208,28 @@ extension HTTPClient {
         ///     - `unsupportedScheme` if URL does contains unsupported HTTP scheme.
         ///     - `emptyHost` if URL does not contains a host.
         ///     - `missingSocketPath` if URL does not contains a socketPath as an encoded host.
-        public init(url: URL, method: HTTPMethod = .GET, headers: HTTPHeaders = HTTPHeaders(), body: Body? = nil) throws {
-            guard let scheme = url.scheme?.lowercased() else {
-                throw HTTPClientError.emptyScheme
-            }
-
-            self.kind = try Kind(forScheme: scheme)
+        public init(url: WebURL, method: HTTPMethod = .GET, headers: HTTPHeaders = HTTPHeaders(), body: Body? = nil) throws {
+            
+            self.kind = try Kind(forScheme: url.schemeObject)
             self.host = try self.kind.hostFromURL(url)
             self.socketPath = try self.kind.socketPathFromURL(url)
-            self.uri = self.kind.uriFromURL(url)
+            self.uri = url.uri
 
             self.redirectState = nil
             self.url = url
             self.method = method
-            self.scheme = scheme
             self.headers = headers
             self.body = body
         }
 
         /// Whether request will be executed using secure socket.
         public var useTLS: Bool {
-            return self.scheme == "https" || self.scheme == "https+unix"
+          return self.url.schemeObject == .https || self.url.schemeObject == .other("https+unix")
         }
 
         /// Resolved port.
         public var port: Int {
-            return self.url.port ?? (self.useTLS ? 443 : 80)
+          return (self.url.port ?? self.url.schemeObject.defaultPort).flatMap { Int($0) } ?? (self.useTLS ? 443 : 80)
         }
     }
 
@@ -400,9 +376,9 @@ public class ResponseAccumulator: HTTPClientResponseDelegate {
         case .idle:
             preconditionFailure("no head received before end")
         case .head(let head):
-            return Response(host: self.request.host, status: head.status, version: head.version, headers: head.headers, body: nil)
+          return Response(host: self.request.host, status: head.status, version: head.version, headers: head.headers, body: nil)
         case .body(let head, let body):
-            return Response(host: self.request.host, status: head.status, version: head.version, headers: head.headers, body: body)
+          return Response(host: self.request.host, status: head.status, version: head.version, headers: head.headers, body: body)
         case .end:
             preconditionFailure("request already processed")
         case .error(let error):
@@ -497,26 +473,10 @@ extension HTTPClientResponseDelegate {
     public func didReceiveError(task: HTTPClient.Task<Response>, _: Error) {}
 }
 
-extension URL {
-    var percentEncodedPath: String {
-        if self.path.isEmpty {
-            return "/"
-        }
-        return URLComponents(url: self, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? self.path
-    }
+extension WebURL {
 
     var uri: String {
-        var uri = self.percentEncodedPath
-
-        if let query = self.query {
-            uri += "?" + query
-        }
-
-        return uri
-    }
-
-    func hasTheSameOrigin(as other: URL) -> Bool {
-        return self.host == other.host && self.scheme == other.scheme && self.port == other.port
+      return (pathname.isEmpty ? "/" : pathname) + search
     }
 
     /// Initializes a newly created HTTP URL connecting to a unix domain socket path. The socket path is encoded as the URL's host, replacing percent encoding invalid path characters, and will use the "http+unix" scheme.
@@ -524,14 +484,14 @@ extension URL {
     ///   - socketPath: The path to the unix domain socket to connect to.
     ///   - uri: The URI path and query that will be sent to the server.
     public init?(httpURLWithSocketPath socketPath: String, uri: String = "/") {
-        guard let host = socketPath.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) else { return nil }
+        let host = WebURL.percentEscapeHostname(socketPath)
         var urlString: String
         if uri.hasPrefix("/") {
             urlString = "http+unix://\(host)\(uri)"
         } else {
             urlString = "http+unix://\(host)/\(uri)"
         }
-        self.init(string: urlString)
+        self.init(urlString)
     }
 
     /// Initializes a newly created HTTPS URL connecting to a unix domain socket path over TLS. The socket path is encoded as the URL's host, replacing percent encoding invalid path characters, and will use the "https+unix" scheme.
@@ -539,14 +499,14 @@ extension URL {
     ///   - socketPath: The path to the unix domain socket to connect to.
     ///   - uri: The URI path and query that will be sent to the server.
     public init?(httpsURLWithSocketPath socketPath: String, uri: String = "/") {
-        guard let host = socketPath.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) else { return nil }
+        let host = WebURL.percentEscapeHostname(socketPath)
         var urlString: String
         if uri.hasPrefix("/") {
             urlString = "https+unix://\(host)\(uri)"
         } else {
             urlString = "https+unix://\(host)/\(uri)"
         }
-        self.init(string: urlString)
+        self.init(urlString)
     }
 }
 
@@ -668,7 +628,7 @@ internal class TaskHandler<Delegate: HTTPClientResponseDelegate>: RemovableChann
         case bodySent
         case sent
         case head
-        case redirected(HTTPResponseHead, URL)
+        case redirected(HTTPResponseHead, WebURL)
         case body
         case endOrError
     }
@@ -805,7 +765,7 @@ extension TaskHandler: ChannelDuplexHandler {
         if !request.headers.contains(name: "host") {
             let port = request.port
             var host = request.host
-            if !(port == 80 && request.scheme == "http"), !(port == 443 && request.scheme == "https") {
+            if port != request.url.schemeObject.defaultPort.map({ Int($0) }) {
                 host += ":\(port)"
             }
             headers.add(name: "host", value: host)
@@ -1059,7 +1019,7 @@ internal struct RedirectHandler<ResponseType> {
     let request: HTTPClient.Request
     let execute: (HTTPClient.Request) -> HTTPClient.Task<ResponseType>
 
-    func redirectTarget(status: HTTPResponseStatus, headers: HTTPHeaders) -> URL? {
+    func redirectTarget(status: HTTPResponseStatus, headers: HTTPHeaders) -> WebURL? {
         switch status {
         case .movedPermanently, .found, .seeOther, .notModified, .useProxy, .temporaryRedirect, .permanentRedirect:
             break
@@ -1071,22 +1031,22 @@ internal struct RedirectHandler<ResponseType> {
             return nil
         }
 
-        guard let url = URL(string: location, relativeTo: request.url) else {
+        guard let url = WebURL(location, baseURL: request.url) else {
             return nil
         }
 
-        guard self.request.kind.supportsRedirects(to: url.scheme) else {
+        guard self.request.kind.supportsRedirects(to: url.schemeObject) else {
             return nil
         }
 
-        if url.isFileURL {
+        if url.scheme == "file:" {
             return nil
         }
 
-        return url.absoluteURL
+        return url
     }
 
-    func redirect(status: HTTPResponseStatus, to redirectURL: URL, promise: EventLoopPromise<ResponseType>) {
+    func redirect(status: HTTPResponseStatus, to redirectURL: WebURL, promise: EventLoopPromise<ResponseType>) {
         var nextState: HTTPClient.Request.RedirectState?
         if var state = request.redirectState {
             guard state.count > 0 else {
@@ -1127,7 +1087,7 @@ internal struct RedirectHandler<ResponseType> {
             headers.remove(name: "Content-Type")
         }
 
-        if !originalRequest.url.hasTheSameOrigin(as: redirectURL) {
+        if !originalRequest.url.origin.isSameOrigin(as: redirectURL.origin) {
             headers.remove(name: "Origin")
             headers.remove(name: "Cookie")
             headers.remove(name: "Authorization")

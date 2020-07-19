@@ -12,7 +12,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Foundation
 import Logging
 import NIO
 import NIOConcurrencyHelpers
@@ -20,6 +19,31 @@ import NIOHTTP1
 import NIOHTTPCompression
 import NIOTLS
 import NIOTransportServices
+import WebURL
+
+extension NIO.NIOClientTCPBootstrap {
+ 
+  func connect(to host: WebURL.Host, port: Int) -> NIO.EventLoopFuture<NIO.Channel> {
+    switch host {
+    case .domain(let hostname):
+      return connect(host: hostname, port: port)
+    case .opaque(_), .empty:
+      return connect(host: host.serialized.percentUnescaped, port: port)
+    case .ipv4Address(let ipAddress):
+      var addr = sockaddr_in()
+      addr.sin_family = UInt8(AF_INET)
+      addr.sin_addr.s_addr = ipAddress.networkAddress
+      addr.sin_port = UInt16(port).bigEndian
+      return connect(to: SocketAddress(addr, host: ipAddress.serialized))
+    case .ipv6Address(let ipAddress):
+      var addr = sockaddr_in6()
+      addr.sin6_family = UInt8(AF_INET6)
+      addr.sin6_addr.__u6_addr.__u6_addr16 = ipAddress.networkAddress
+      addr.sin6_port = UInt16(port).bigEndian
+      return connect(to: SocketAddress(addr, host: ipAddress.serialized))
+    }
+  }
+}
 
 /// A connection pool that manages and creates new connections to hosts respecting the specified preferences
 ///
@@ -122,27 +146,27 @@ final class ConnectionPool {
     /// connection providers associated to a certain request in constant time.
     struct Key: Hashable {
         init(_ request: HTTPClient.Request) {
-            switch request.scheme {
-            case "http":
+           switch request.url.schemeObject {
+           case .http:
                 self.scheme = .http
-            case "https":
+           case .https:
                 self.scheme = .https
-            case "unix":
+           case .other("unix"):
                 self.scheme = .unix
-            case "http+unix":
+           case .other("http+unix"):
                 self.scheme = .http_unix
-            case "https+unix":
+           case .other("https+unix"):
                 self.scheme = .https_unix
             default:
                 fatalError("HTTPClient.Request scheme should already be a valid one")
             }
             self.port = request.port
-            self.host = request.host
+            self.host = request.url.hostObject ?? .empty
             self.unixPath = request.socketPath
         }
 
         var scheme: Scheme
-        var host: String
+        var host: WebURL.Host
         var port: Int
         var unixPath: String
 

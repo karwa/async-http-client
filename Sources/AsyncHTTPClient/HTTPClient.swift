@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Foundation
+import Dispatch
 import Logging
 import NIO
 import NIOConcurrencyHelpers
@@ -21,6 +21,7 @@ import NIOHTTPCompression
 import NIOSSL
 import NIOTLS
 import NIOTransportServices
+import WebURL
 
 extension Logger {
     private func requestInfo(_ request: HTTPClient.Request) -> Logger.Metadata.Value {
@@ -350,7 +351,7 @@ public class HTTPClient {
     ///     - logger: The logger to use for this request.
     public func execute(_ method: HTTPMethod = .GET, socketPath: String, urlPath: String, body: Body? = nil, deadline: NIODeadline? = nil, logger: Logger? = nil) -> EventLoopFuture<Response> {
         do {
-            guard let url = URL(httpURLWithSocketPath: socketPath, uri: urlPath) else {
+            guard let url = WebURL(httpURLWithSocketPath: socketPath, uri: urlPath) else {
                 throw HTTPClientError.invalidURL
             }
             let request = try Request(url: url, method: method, body: body)
@@ -371,7 +372,7 @@ public class HTTPClient {
     ///     - logger: The logger to use for this request.
     public func execute(_ method: HTTPMethod = .GET, secureSocketPath: String, urlPath: String, body: Body? = nil, deadline: NIODeadline? = nil, logger: Logger? = nil) -> EventLoopFuture<Response> {
         do {
-            guard let url = URL(httpsURLWithSocketPath: secureSocketPath, uri: urlPath) else {
+            guard let url = WebURL(httpsURLWithSocketPath: secureSocketPath, uri: urlPath) else {
                 throw HTTPClientError.invalidURL
             }
             let request = try Request(url: url, method: method, body: body)
@@ -615,7 +616,7 @@ public class HTTPClient {
         }
     }
 
-    static func resolveAddress(host: String, port: Int, proxy: Configuration.Proxy?) -> (host: String, port: Int) {
+    static func resolveAddress(host: WebURL.Host, port: Int, proxy: Configuration.Proxy?) -> (host: WebURL.Host, port: Int) {
         switch proxy {
         case .none:
             return (host, port)
@@ -873,7 +874,7 @@ extension HTTPClient.Configuration {
 }
 
 extension ChannelPipeline {
-    func addProxyHandler(host: String, port: Int, authorization: HTTPClient.Authorization?) -> EventLoopFuture<Void> {
+  func addProxyHandler(host: WebURL.Host, port: Int, authorization: HTTPClient.Authorization?) -> EventLoopFuture<Void> {
         let encoder = HTTPRequestEncoder()
         let decoder = ByteToMessageHandler(HTTPResponseDecoder(leftOverBytesStrategy: .forwardBytes))
         let handler = HTTPClientProxyHandler(host: host, port: port, authorization: authorization) { channel in
@@ -898,7 +899,7 @@ extension ChannelPipeline {
                 let tlsConfiguration = tlsConfiguration ?? TLSConfiguration.forClient()
                 let context = try NIOSSLContext(configuration: tlsConfiguration)
                 handlers = [
-                    try NIOSSLClientHandler(context: context, serverHostname: (key.host.isIPAddress || key.host.isEmpty) ? nil : key.host),
+                  try NIOSSLClientHandler(context: context, serverHostname: key.host.hostnameIfSupportsTLS()),
                     TLSEventsHandler(completionPromise: handshakePromise),
                 ]
             } else {

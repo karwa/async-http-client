@@ -1016,18 +1016,20 @@ class HTTPClientInternalTests: XCTestCase {
         XCTAssertEqual(request2.socketPath, "")
         XCTAssertEqual(request2.uri, "/")
 
-        let request3 = try Request(url: "unix:///tmp/file")
-        XCTAssertEqual(request3.kind, .unixSocket(.baseURL))
-        XCTAssertEqual(request3.socketPath, "/tmp/file")
-        XCTAssertEqual(request3.uri, "/")
+      // Technically, this is not correct. "unix:///tmp/file" means empty host,
+      // and the path is "/tmp/file".
+//        let request3 = try Request(url: "unix:///tmp/file")
+//        XCTAssertEqual(request3.kind, .unixSocket)
+//        XCTAssertEqual(request3.socketPath, "/tmp/file")
+//        XCTAssertEqual(request3.uri, "/tmp/file")
 
         let request4 = try Request(url: "http+unix://%2Ftmp%2Ffile/file/path")
-        XCTAssertEqual(request4.kind, .unixSocket(.http_unix))
+        XCTAssertEqual(request4.kind, .unixSocket)
         XCTAssertEqual(request4.socketPath, "/tmp/file")
         XCTAssertEqual(request4.uri, "/file/path")
 
         let request5 = try Request(url: "https+unix://%2Ftmp%2Ffile/file/path")
-        XCTAssertEqual(request5.kind, .unixSocket(.https_unix))
+        XCTAssertEqual(request5.kind, .unixSocket)
         XCTAssertEqual(request5.socketPath, "/tmp/file")
         XCTAssertEqual(request5.uri, "/file/path")
     }
