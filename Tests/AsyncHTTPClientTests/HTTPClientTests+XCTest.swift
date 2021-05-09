@@ -96,7 +96,6 @@ extension HTTPClientTests {
             ("testMakeSecondRequestDuringSuccessCallout", testMakeSecondRequestDuringSuccessCallout),
             ("testMakeSecondRequestWhilstFirstIsOngoing", testMakeSecondRequestWhilstFirstIsOngoing),
             ("testUDSBasic", testUDSBasic),
-            ("testUDSSocketAndPath", testUDSSocketAndPath),
             ("testHTTPPlusUNIX", testHTTPPlusUNIX),
             ("testHTTPSPlusUNIX", testHTTPSPlusUNIX),
             ("testUseExistingConnectionOnDifferentEL", testUseExistingConnectionOnDifferentEL),

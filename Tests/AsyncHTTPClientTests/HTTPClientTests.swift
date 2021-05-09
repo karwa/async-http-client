@@ -26,6 +26,7 @@ import NIOSSL
 import NIOTestUtils
 import NIOTransportServices
 import XCTest
+import WebURL
 
 class HTTPClientTests: XCTestCase {
     typealias Request = HTTPClient.Request
@@ -83,17 +84,17 @@ class HTTPClientTests: XCTestCase {
 
     func testRequestURI() throws {
         let request1 = try Request(url: "https://someserver.com:8888/some/path?foo=bar")
-        XCTAssertEqual(request1.url.host, "someserver.com")
+        XCTAssertEqual(request1.url.hostname, "someserver.com")
         XCTAssertEqual(request1.url.path, "/some/path")
-        XCTAssertEqual(request1.url.query!, "foo=bar")
+        XCTAssertEqual(request1.url.query, "foo=bar")
         XCTAssertEqual(request1.port, 8888)
         XCTAssertTrue(request1.useTLS)
 
         let request2 = try Request(url: "https://someserver.com")
-        XCTAssertEqual(request2.url.path, "")
+        XCTAssertEqual(request2.url.path, "/")
 
         let request3 = try Request(url: "unix:///tmp/file")
-        XCTAssertNil(request3.url.host)
+        XCTAssertEqual(request3.url.hostname, "")
         XCTAssertEqual(request3.host, "")
         XCTAssertEqual(request3.url.path, "/tmp/file")
         XCTAssertEqual(request3.port, 80)
@@ -101,26 +102,33 @@ class HTTPClientTests: XCTestCase {
 
         let request4 = try Request(url: "http+unix://%2Ftmp%2Ffile/file/path")
         XCTAssertEqual(request4.host, "")
-        XCTAssertEqual(request4.url.host, "/tmp/file")
+        XCTAssertEqual(request4.url.hostname?.percentDecoded, "/tmp/file")
         XCTAssertEqual(request4.url.path, "/file/path")
         XCTAssertFalse(request4.useTLS)
 
         let request5 = try Request(url: "https+unix://%2Ftmp%2Ffile/file/path")
         XCTAssertEqual(request5.host, "")
-        XCTAssertEqual(request5.url.host, "/tmp/file")
+        XCTAssertEqual(request5.url.hostname?.percentDecoded, "/tmp/file")
         XCTAssertEqual(request5.url.path, "/file/path")
         XCTAssertTrue(request5.useTLS)
+      
+        // This may seem strange, but it's what the URL standard says should happen.
+        let request6 = try Request(url: "https:/foo")
+        XCTAssertEqual(request6.url.hostname, "foo")
+        XCTAssertEqual(request6.url.path, "/")
+        XCTAssertEqual(request6.url.serialized, "https://foo/")
+        XCTAssertTrue(request6.useTLS)
     }
 
     func testBadRequestURI() throws {
         XCTAssertThrowsError(try Request(url: "some/path"), "should throw") { error in
-            XCTAssertEqual(error as! HTTPClientError, HTTPClientError.emptyScheme)
+            XCTAssertEqual(error as! HTTPClientError, HTTPClientError.invalidURL)
         }
         XCTAssertThrowsError(try Request(url: "app://somewhere/some/path?foo=bar"), "should throw") { error in
             XCTAssertEqual(error as! HTTPClientError, HTTPClientError.unsupportedScheme("app"))
         }
-        XCTAssertThrowsError(try Request(url: "https:/foo"), "should throw") { error in
-            XCTAssertEqual(error as! HTTPClientError, HTTPClientError.emptyHost)
+        XCTAssertThrowsError(try Request(url: "unix:"), "should throw") { error in
+            XCTAssertEqual(error as! HTTPClientError, HTTPClientError.missingSocketPath)
         }
         XCTAssertThrowsError(try Request(url: "http+unix:///path"), "should throw") { error in
             XCTAssertEqual(error as! HTTPClientError, HTTPClientError.missingSocketPath)
@@ -135,83 +143,95 @@ class HTTPClientTests: XCTestCase {
     }
 
     func testURLSocketPathInitializers() throws {
-        let url1 = URL(httpURLWithSocketPath: "/tmp/file")
+        let url1 = WebURL(httpURLWithSocketPath: "/tmp/file")
         XCTAssertNotNil(url1)
         if let url = url1 {
             XCTAssertEqual(url.scheme, "http+unix")
-            XCTAssertEqual(url.host, "/tmp/file")
+            XCTAssertEqual(url.hostname?.percentDecoded, "/tmp/file")
             XCTAssertEqual(url.path, "/")
-            XCTAssertEqual(url.absoluteString, "http+unix://%2Ftmp%2Ffile/")
+            XCTAssertEqual(url.serialized, "http+unix://%2Ftmp%2Ffile/")
         }
 
-        let url2 = URL(httpURLWithSocketPath: "/tmp/file", uri: "/file/path")
+        let url2 = WebURL(httpURLWithSocketPath: "/tmp/file", uri: "/file/path")
         XCTAssertNotNil(url2)
         if let url = url2 {
             XCTAssertEqual(url.scheme, "http+unix")
-            XCTAssertEqual(url.host, "/tmp/file")
+            XCTAssertEqual(url.hostname?.percentDecoded, "/tmp/file")
             XCTAssertEqual(url.path, "/file/path")
-            XCTAssertEqual(url.absoluteString, "http+unix://%2Ftmp%2Ffile/file/path")
+            XCTAssertEqual(url.serialized, "http+unix://%2Ftmp%2Ffile/file/path")
         }
 
-        let url3 = URL(httpURLWithSocketPath: "/tmp/file", uri: "file/path")
+        let url3 = WebURL(httpURLWithSocketPath: "/tmp/file", uri: "file/path")
         XCTAssertNotNil(url3)
         if let url = url3 {
             XCTAssertEqual(url.scheme, "http+unix")
-            XCTAssertEqual(url.host, "/tmp/file")
+            XCTAssertEqual(url.hostname?.percentDecoded, "/tmp/file")
             XCTAssertEqual(url.path, "/file/path")
-            XCTAssertEqual(url.absoluteString, "http+unix://%2Ftmp%2Ffile/file/path")
+            XCTAssertEqual(url.serialized, "http+unix://%2Ftmp%2Ffile/file/path")
         }
 
-        let url4 = URL(httpURLWithSocketPath: "/tmp/file with spacesと漢字", uri: "file/path")
+        let url4 = WebURL(httpURLWithSocketPath: "/tmp/file with spacesと漢字", uri: "file/path")
         XCTAssertNotNil(url4)
         if let url = url4 {
             XCTAssertEqual(url.scheme, "http+unix")
-            XCTAssertEqual(url.host, "/tmp/file with spacesと漢字")
+            XCTAssertEqual(url.hostname?.percentDecoded, "/tmp/file with spacesと漢字")
             XCTAssertEqual(url.path, "/file/path")
-            XCTAssertEqual(url.absoluteString, "http+unix://%2Ftmp%2Ffile%20with%20spaces%E3%81%A8%E6%BC%A2%E5%AD%97/file/path")
+            XCTAssertEqual(url.serialized, "http+unix://%2Ftmp%2Ffile%20with%20spaces%E3%81%A8%E6%BC%A2%E5%AD%97/file/path")
         }
 
-        let url5 = URL(httpsURLWithSocketPath: "/tmp/file")
+        let url5 = WebURL(httpsURLWithSocketPath: "/tmp/file")
         XCTAssertNotNil(url5)
         if let url = url5 {
             XCTAssertEqual(url.scheme, "https+unix")
-            XCTAssertEqual(url.host, "/tmp/file")
+            XCTAssertEqual(url.hostname?.percentDecoded, "/tmp/file")
             XCTAssertEqual(url.path, "/")
-            XCTAssertEqual(url.absoluteString, "https+unix://%2Ftmp%2Ffile/")
+            XCTAssertEqual(url.serialized, "https+unix://%2Ftmp%2Ffile/")
         }
 
-        let url6 = URL(httpsURLWithSocketPath: "/tmp/file", uri: "/file/path")
+        let url6 = WebURL(httpsURLWithSocketPath: "/tmp/file", uri: "/file/path")
         XCTAssertNotNil(url6)
         if let url = url6 {
             XCTAssertEqual(url.scheme, "https+unix")
-            XCTAssertEqual(url.host, "/tmp/file")
+            XCTAssertEqual(url.hostname?.percentDecoded, "/tmp/file")
             XCTAssertEqual(url.path, "/file/path")
-            XCTAssertEqual(url.absoluteString, "https+unix://%2Ftmp%2Ffile/file/path")
+            XCTAssertEqual(url.serialized, "https+unix://%2Ftmp%2Ffile/file/path")
         }
 
-        let url7 = URL(httpsURLWithSocketPath: "/tmp/file", uri: "file/path")
+        let url7 = WebURL(httpsURLWithSocketPath: "/tmp/file", uri: "file/path")
         XCTAssertNotNil(url7)
         if let url = url7 {
             XCTAssertEqual(url.scheme, "https+unix")
-            XCTAssertEqual(url.host, "/tmp/file")
+            XCTAssertEqual(url.hostname?.percentDecoded, "/tmp/file")
             XCTAssertEqual(url.path, "/file/path")
-            XCTAssertEqual(url.absoluteString, "https+unix://%2Ftmp%2Ffile/file/path")
+            XCTAssertEqual(url.serialized, "https+unix://%2Ftmp%2Ffile/file/path")
         }
 
-        let url8 = URL(httpsURLWithSocketPath: "/tmp/file with spacesと漢字", uri: "file/path")
+        let url8 = WebURL(httpsURLWithSocketPath: "/tmp/file with spacesと漢字", uri: "file/path")
         XCTAssertNotNil(url8)
         if let url = url8 {
             XCTAssertEqual(url.scheme, "https+unix")
-            XCTAssertEqual(url.host, "/tmp/file with spacesと漢字")
+            XCTAssertEqual(url.hostname?.percentDecoded, "/tmp/file with spacesと漢字")
             XCTAssertEqual(url.path, "/file/path")
-            XCTAssertEqual(url.absoluteString, "https+unix://%2Ftmp%2Ffile%20with%20spaces%E3%81%A8%E6%BC%A2%E5%AD%97/file/path")
+            XCTAssertEqual(url.serialized, "https+unix://%2Ftmp%2Ffile%20with%20spaces%E3%81%A8%E6%BC%A2%E5%AD%97/file/path")
         }
 
-        let url9 = URL(httpURLWithSocketPath: "/tmp/file", uri: " ")
-        XCTAssertNil(url9)
+        let url9 = WebURL(httpURLWithSocketPath: "/tmp/file", uri: " ")
+        XCTAssertNotNil(url9)
+        if let url = url9 {
+            XCTAssertEqual(url.scheme, "http+unix")
+            XCTAssertEqual(url.hostname?.percentDecoded, "/tmp/file")
+            XCTAssertEqual(url.path, "/")
+            XCTAssertEqual(url.serialized, "http+unix://%2Ftmp%2Ffile/")
+        }
 
-        let url10 = URL(httpsURLWithSocketPath: "/tmp/file", uri: " ")
-        XCTAssertNil(url10)
+        let url10 = WebURL(httpsURLWithSocketPath: "/tmp/file", uri: " ")
+        XCTAssertNotNil(url10)
+        if let url = url9 {
+            XCTAssertEqual(url.scheme, "http+unix")
+            XCTAssertEqual(url.hostname?.percentDecoded, "/tmp/file")
+            XCTAssertEqual(url.path, "/")
+            XCTAssertEqual(url.serialized, "http+unix://%2Ftmp%2Ffile/")
+        }
     }
 
     func testConvenienceExecuteMethods() throws {
@@ -631,7 +651,7 @@ class HTTPClientTests: XCTestCase {
         let localHTTPBin = HTTPBin(simulateProxy: .plaintext)
         let localClient = HTTPClient(
             eventLoopGroupProvider: .shared(self.clientGroup),
-            configuration: .init(proxy: .server(host: "localhost", port: localHTTPBin.port))
+            configuration: .init(proxy: .server(host: .domain("localhost"), port: localHTTPBin.port))
         )
         defer {
             XCTAssertNoThrow(try localClient.syncShutdown())
@@ -647,7 +667,7 @@ class HTTPClientTests: XCTestCase {
             eventLoopGroupProvider: .shared(self.clientGroup),
             configuration: .init(
                 certificateVerification: .none,
-                proxy: .server(host: "localhost", port: localHTTPBin.port)
+                proxy: .server(host: .domain("localhost"), port: localHTTPBin.port)
             )
         )
         defer {
@@ -662,7 +682,7 @@ class HTTPClientTests: XCTestCase {
         let localHTTPBin = HTTPBin(simulateProxy: .plaintext)
         let localClient = HTTPClient(
             eventLoopGroupProvider: .shared(self.clientGroup),
-            configuration: .init(proxy: .server(host: "localhost", port: localHTTPBin.port, authorization: .basic(username: "aladdin", password: "opensesame")))
+            configuration: .init(proxy: .server(host: .domain("localhost"), port: localHTTPBin.port, authorization: .basic(username: "aladdin", password: "opensesame")))
         )
         defer {
             XCTAssertNoThrow(try localClient.syncShutdown())
@@ -675,7 +695,7 @@ class HTTPClientTests: XCTestCase {
     func testProxyPlaintextWithIncorrectlyAuthorization() throws {
         let localHTTPBin = HTTPBin(simulateProxy: .plaintext)
         let localClient = HTTPClient(eventLoopGroupProvider: .shared(self.clientGroup),
-                                     configuration: .init(proxy: .server(host: "localhost",
+                                     configuration: .init(proxy: .server(host: .domain("localhost"),
                                                                          port: localHTTPBin.port,
                                                                          authorization: .basic(username: "aladdin",
                                                                                                password: "opensesamefoo"))))
@@ -1618,40 +1638,21 @@ class HTTPClientTests: XCTestCase {
             defer {
                 XCTAssertNoThrow(try localHTTPBin.shutdown())
             }
-            let target = "unix://\(path)"
+            var target = WebURL("unix:///")!
+            target.path = path
             XCTAssertNoThrow(XCTAssertEqual(["Yes"[...]],
-                                            try self.defaultClient.get(url: target).wait().headers[canonicalForm: "X-Is-This-Slash"]))
-        })
-    }
-
-    func testUDSSocketAndPath() {
-        // Here, we're testing a URL that's encoding two different paths:
-        //
-        //  1. a "base path" which is the path to the UNIX domain socket
-        //  2. an actual path which is the normal path in a regular URL like https://example.com/this/is/the/path
-        XCTAssertNoThrow(try TemporaryFileHelpers.withTemporaryUnixDomainSocketPathName { path in
-            let localHTTPBin = HTTPBin(bindTarget: .unixDomainSocket(path))
-            defer {
-                XCTAssertNoThrow(try localHTTPBin.shutdown())
-            }
-            guard let target = URL(string: "/echo-uri", relativeTo: URL(string: "unix://\(path)")),
-                let request = try? Request(url: target) else {
-                XCTFail("couldn't build URL for request")
-                return
-            }
-            XCTAssertNoThrow(XCTAssertEqual(["/echo-uri"[...]],
-                                            try self.defaultClient.execute(request: request).wait().headers[canonicalForm: "X-Calling-URI"]))
+                                            try self.defaultClient.get(url: target.serialized).wait().headers[canonicalForm: "X-Is-This-Slash"]))
         })
     }
 
     func testHTTPPlusUNIX() {
         // Here, we're testing a URL where the UNIX domain socket is encoded as the host name
         XCTAssertNoThrow(try TemporaryFileHelpers.withTemporaryUnixDomainSocketPathName { path in
-            let localHTTPBin = HTTPBin(bindTarget: .unixDomainSocket(path))
+          let localHTTPBin = HTTPBin(bindTarget: .unixDomainSocket(path))
             defer {
                 XCTAssertNoThrow(try localHTTPBin.shutdown())
             }
-            guard let target = URL(httpURLWithSocketPath: path, uri: "/echo-uri"),
+            guard let target = WebURL(httpURLWithSocketPath: path, uri: "/echo-uri"),
                 let request = try? Request(url: target) else {
                 XCTFail("couldn't build URL for request")
                 return
@@ -1671,7 +1672,7 @@ class HTTPClientTests: XCTestCase {
                 XCTAssertNoThrow(try localClient.syncShutdown())
                 XCTAssertNoThrow(try localHTTPBin.shutdown())
             }
-            guard let target = URL(httpsURLWithSocketPath: path, uri: "/echo-uri"),
+            guard let target = WebURL(httpsURLWithSocketPath: path, uri: "/echo-uri"),
                 let request = try? Request(url: target) else {
                 XCTFail("couldn't build URL for request")
                 return

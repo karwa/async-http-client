@@ -409,40 +409,52 @@ class HTTPClientInternalTests: XCTestCase {
 
     func testRequestURITrailingSlash() throws {
         let request1 = try Request(url: "https://someserver.com:8888/some/path?foo=bar#ref")
-        XCTAssertEqual(request1.url.uri, "/some/path?foo=bar")
+        XCTAssertEqual(request1.url.originFormRequestTarget, "/some/path?foo=bar")
 
         let request2 = try Request(url: "https://someserver.com:8888/some/path/?foo=bar#ref")
-        XCTAssertEqual(request2.url.uri, "/some/path/?foo=bar")
+        XCTAssertEqual(request2.url.originFormRequestTarget, "/some/path/?foo=bar")
 
         let request3 = try Request(url: "https://someserver.com:8888?foo=bar#ref")
-        XCTAssertEqual(request3.url.uri, "/?foo=bar")
+        XCTAssertEqual(request3.url.originFormRequestTarget, "/?foo=bar")
 
         let request4 = try Request(url: "https://someserver.com:8888/?foo=bar#ref")
-        XCTAssertEqual(request4.url.uri, "/?foo=bar")
+        XCTAssertEqual(request4.url.originFormRequestTarget, "/?foo=bar")
 
         let request5 = try Request(url: "https://someserver.com:8888/some/path")
-        XCTAssertEqual(request5.url.uri, "/some/path")
+        XCTAssertEqual(request5.url.originFormRequestTarget, "/some/path")
 
         let request6 = try Request(url: "https://someserver.com:8888/some/path/")
-        XCTAssertEqual(request6.url.uri, "/some/path/")
+        XCTAssertEqual(request6.url.originFormRequestTarget, "/some/path/")
 
         let request7 = try Request(url: "https://someserver.com:8888")
-        XCTAssertEqual(request7.url.uri, "/")
+        XCTAssertEqual(request7.url.originFormRequestTarget, "/")
 
         let request8 = try Request(url: "https://someserver.com:8888/")
-        XCTAssertEqual(request8.url.uri, "/")
+        XCTAssertEqual(request8.url.originFormRequestTarget, "/")
 
         let request9 = try Request(url: "https://someserver.com:8888#ref")
-        XCTAssertEqual(request9.url.uri, "/")
+        XCTAssertEqual(request9.url.originFormRequestTarget, "/")
 
         let request10 = try Request(url: "https://someserver.com:8888/#ref")
-        XCTAssertEqual(request10.url.uri, "/")
+        XCTAssertEqual(request10.url.originFormRequestTarget, "/")
 
         let request11 = try Request(url: "https://someserver.com/some%20path")
-        XCTAssertEqual(request11.url.uri, "/some%20path")
+        XCTAssertEqual(request11.url.originFormRequestTarget, "/some%20path")
 
         let request12 = try Request(url: "https://someserver.com/some%2Fpathsegment1/pathsegment2")
-        XCTAssertEqual(request12.url.uri, "/some%2Fpathsegment1/pathsegment2")
+        XCTAssertEqual(request12.url.originFormRequestTarget, "/some%2Fpathsegment1/pathsegment2")
+
+        let request13 = try Request(url: "https+unix://some%2Fsocket%2Fpath")
+        XCTAssertEqual(request13.url.originFormRequestTarget, "/")
+
+        let request14 = try Request(url: "https+unix://some%2Fsocket%2Fpath?someQuery")
+        XCTAssertEqual(request14.url.originFormRequestTarget, "/?someQuery")
+
+        let request15 = try Request(url: "https+unix://some%2Fsocket%2Fpath/request/path")
+        XCTAssertEqual(request15.url.originFormRequestTarget, "/request/path")
+
+        let request16 = try Request(url: "https+unix://some%2Fsocket%2Fpath/request/path?someQuery")
+        XCTAssertEqual(request16.url.originFormRequestTarget, "/request/path?someQuery")
     }
 
     func testChannelAndDelegateOnDifferentEventLoops() throws {
@@ -560,7 +572,7 @@ class HTTPClientInternalTests: XCTestCase {
 
         switch sentMessages.dropFirst(0).first {
         case .some(.sentRequestHead(let head)):
-            XCTAssertEqual(request.url.uri, head.uri)
+            XCTAssertEqual(request.url.originFormRequestTarget, head.uri)
         default:
             XCTFail("wrong message")
         }
@@ -1111,17 +1123,17 @@ class HTTPClientInternalTests: XCTestCase {
         XCTAssertEqual(request2.uri, "/")
 
         let request3 = try Request(url: "unix:///tmp/file")
-        XCTAssertEqual(request3.kind, .unixSocket(.baseURL))
+        XCTAssertEqual(request3.kind, .unixSocket)
         XCTAssertEqual(request3.socketPath, "/tmp/file")
         XCTAssertEqual(request3.uri, "/")
 
         let request4 = try Request(url: "http+unix://%2Ftmp%2Ffile/file/path")
-        XCTAssertEqual(request4.kind, .unixSocket(.http_unix))
+        XCTAssertEqual(request4.kind, .unixSocket)
         XCTAssertEqual(request4.socketPath, "/tmp/file")
         XCTAssertEqual(request4.uri, "/file/path")
 
         let request5 = try Request(url: "https+unix://%2Ftmp%2Ffile/file/path")
-        XCTAssertEqual(request5.kind, .unixSocket(.https_unix))
+        XCTAssertEqual(request5.kind, .unixSocket)
         XCTAssertEqual(request5.socketPath, "/tmp/file")
         XCTAssertEqual(request5.uri, "/file/path")
     }

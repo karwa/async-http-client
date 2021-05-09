@@ -14,6 +14,7 @@
 
 import NIO
 import NIOHTTP1
+import WebURL
 
 public extension HTTPClient.Configuration {
     /// Proxy server configuration
@@ -28,7 +29,7 @@ public extension HTTPClient.Configuration {
     /// and the destination server.
     struct Proxy {
         /// Specifies Proxy server host.
-        public var host: String
+        public var host: WebURL.Host
         /// Specifies Proxy server port.
         public var port: Int
         /// Specifies Proxy server authorization.
@@ -39,7 +40,7 @@ public extension HTTPClient.Configuration {
         /// - parameters:
         ///     - host: proxy server host.
         ///     - port: proxy server port.
-        public static func server(host: String, port: Int) -> Proxy {
+        public static func server(host: WebURL.Host, port: Int) -> Proxy {
             return .init(host: host, port: port, authorization: nil)
         }
 
@@ -49,7 +50,7 @@ public extension HTTPClient.Configuration {
         ///     - host: proxy server host.
         ///     - port: proxy server port.
         ///     - authorization: proxy server authorization.
-        public static func server(host: String, port: Int, authorization: HTTPClient.Authorization? = nil) -> Proxy {
+        public static func server(host: WebURL.Host, port: Int, authorization: HTTPClient.Authorization? = nil) -> Proxy {
             return .init(host: host, port: port, authorization: authorization)
         }
     }
@@ -72,7 +73,7 @@ internal final class HTTPClientProxyHandler: ChannelDuplexHandler, RemovableChan
         case failed
     }
 
-    private let host: String
+    private let host: WebURL.Host
     private let port: Int
     private let authorization: HTTPClient.Authorization?
     private var onConnect: (Channel) -> EventLoopFuture<Void>
@@ -80,7 +81,7 @@ internal final class HTTPClientProxyHandler: ChannelDuplexHandler, RemovableChan
     private var readBuffer: CircularBuffer<NIOAny>
     private var readState: ReadState
 
-    init(host: String, port: Int, authorization: HTTPClient.Authorization?, onConnect: @escaping (Channel) -> EventLoopFuture<Void>) {
+    init(host: WebURL.Host, port: Int, authorization: HTTPClient.Authorization?, onConnect: @escaping (Channel) -> EventLoopFuture<Void>) {
         self.host = host
         self.port = port
         self.authorization = authorization
@@ -167,7 +168,7 @@ internal final class HTTPClientProxyHandler: ChannelDuplexHandler, RemovableChan
         var head = HTTPRequestHead(
             version: .init(major: 1, minor: 1),
             method: .CONNECT,
-            uri: "\(self.host):\(self.port)"
+            uri: "\(self.host.serialized):\(self.port)"
         )
         head.headers.add(name: "proxy-connection", value: "keep-alive")
         if let authorization = authorization {

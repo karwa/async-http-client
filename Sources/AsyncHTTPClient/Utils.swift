@@ -12,7 +12,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Foundation
 #if canImport(Network)
     import Network
 #endif
@@ -21,16 +20,16 @@ import NIOHTTP1
 import NIOHTTPCompression
 import NIOSSL
 import NIOTransportServices
+import WebURL
 
-internal extension String {
-    var isIPAddress: Bool {
-        var ipv4Addr = in_addr()
-        var ipv6Addr = in6_addr()
-
-        return self.withCString { ptr in
-            inet_pton(AF_INET, ptr, &ipv4Addr) == 1 ||
-                inet_pton(AF_INET6, ptr, &ipv6Addr) == 1
+extension WebURL.Host {
+  
+    /// Returns the hostname if it is a domain.
+    internal var domainNameOrNil: String? {
+        if case .domain(let domain) = self {
+            return domain
         }
+        return nil
     }
 }
 
@@ -54,7 +53,7 @@ public final class HTTPClientCopyingDelegate: HTTPClientResponseDelegate {
 
 extension ClientBootstrap {
     fileprivate func makeClientTCPBootstrap(
-        host: String,
+        host: WebURL.Host,
         requiresTLS: Bool,
         configuration: HTTPClient.Configuration
     ) throws -> NIOClientTCPBootstrap {
@@ -64,7 +63,7 @@ extension ClientBootstrap {
         } else {
             let tlsConfiguration = configuration.tlsConfiguration ?? TLSConfiguration.forClient()
             let sslContext = try NIOSSLContext(configuration: tlsConfiguration)
-            let hostname = (!requiresTLS || host.isIPAddress || host.isEmpty) ? nil : host
+            let hostname = requiresTLS ? host.domainNameOrNil : nil
             let tlsProvider = try NIOSSLClientTLSProvider<ClientBootstrap>(context: sslContext, serverHostname: hostname)
             return NIOClientTCPBootstrap(self, tls: tlsProvider)
         }
@@ -75,7 +74,7 @@ extension NIOClientTCPBootstrap {
     /// create a TCP Bootstrap based off what type of `EventLoop` has been passed to the function.
     fileprivate static func makeBootstrap(
         on eventLoop: EventLoop,
-        host: String,
+        host: WebURL.Host,
         requiresTLS: Bool,
         configuration: HTTPClient.Configuration
     ) throws -> NIOClientTCPBootstrap {
@@ -120,7 +119,7 @@ extension NIOClientTCPBootstrap {
 
     static func makeHTTPClientBootstrapBase(
         on eventLoop: EventLoop,
-        host: String,
+        host: WebURL.Host,
         port: Int,
         requiresTLS: Bool,
         configuration: HTTPClient.Configuration
@@ -161,7 +160,7 @@ extension NIOClientTCPBootstrap {
         switch key.scheme {
         case .http, .https:
             let address = HTTPClient.resolveAddress(host: key.host, port: key.port, proxy: configuration.proxy)
-            channel = bootstrap.connect(host: address.host, port: address.port)
+            channel = bootstrap.connect(to: address.host, port: address.port)
         case .unix, .http_unix, .https_unix:
             channel = bootstrap.connect(unixDomainSocketPath: key.unixPath)
         }
@@ -219,6 +218,38 @@ extension NIOClientTCPBootstrap {
                 }
             #endif
             return channelEventLoop.makeFailedFuture(error)
+        }
+    }
+}
+
+#if canImport(Darwin)
+private let in6_union_property = \in6_addr.__u6_addr
+#else
+private let in6_union_property = \in6_addr.__in6_u
+#endif
+
+internal extension NIO.NIOClientTCPBootstrap {
+ 
+    func connect(to host: WebURL.Host, port: Int) -> NIO.EventLoopFuture<NIO.Channel> {
+        switch host {
+        case .domain(let hostname):
+            return connect(host: hostname, port: port)
+        case .ipv4Address(let ipAddress):
+            var addr = sockaddr_in()
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_addr.s_addr = ipAddress[value: .binary]
+            addr.sin_port = in_port_t(port).bigEndian
+            return connect(to: SocketAddress(addr, host: ipAddress.serialized))
+        case .ipv6Address(let ipAddress):
+            var addr = sockaddr_in6()
+            addr.sin6_family = sa_family_t(AF_INET6)
+            addr.sin6_addr[keyPath: in6_union_property].__u6_addr8 = ipAddress.octets
+            addr.sin6_port = in_port_t(port).bigEndian
+            return connect(to: SocketAddress(addr, host: ipAddress.serialized))
+        case .opaque(let name):
+            fatalError("Attempting to connect to host from non-http(s) URL: \(name.percentDecoded)")
+        case .empty:
+            fatalError("http(s) URLs cannot have empty hostnames")
         }
     }
 }

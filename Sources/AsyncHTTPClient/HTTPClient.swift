@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Foundation
+import Dispatch
 import Logging
 import NIO
 import NIOConcurrencyHelpers
@@ -21,6 +21,7 @@ import NIOHTTPCompression
 import NIOSSL
 import NIOTLS
 import NIOTransportServices
+import WebURL
 
 extension Logger {
     private func requestInfo(_ request: HTTPClient.Request) -> Logger.Metadata.Value {
@@ -350,7 +351,7 @@ public class HTTPClient {
     ///     - logger: The logger to use for this request.
     public func execute(_ method: HTTPMethod = .GET, socketPath: String, urlPath: String, body: Body? = nil, deadline: NIODeadline? = nil, logger: Logger? = nil) -> EventLoopFuture<Response> {
         do {
-            guard let url = URL(httpURLWithSocketPath: socketPath, uri: urlPath) else {
+            guard let url = WebURL(httpURLWithSocketPath: socketPath, uri: urlPath) else {
                 throw HTTPClientError.invalidURL
             }
             let request = try Request(url: url, method: method, body: body)
@@ -371,7 +372,7 @@ public class HTTPClient {
     ///     - logger: The logger to use for this request.
     public func execute(_ method: HTTPMethod = .GET, secureSocketPath: String, urlPath: String, body: Body? = nil, deadline: NIODeadline? = nil, logger: Logger? = nil) -> EventLoopFuture<Response> {
         do {
-            guard let url = URL(httpsURLWithSocketPath: secureSocketPath, uri: urlPath) else {
+            guard let url = WebURL(httpsURLWithSocketPath: secureSocketPath, uri: urlPath) else {
                 throw HTTPClientError.invalidURL
             }
             let request = try Request(url: url, method: method, body: body)
@@ -625,7 +626,7 @@ public class HTTPClient {
         }
     }
 
-    static func resolveAddress(host: String, port: Int, proxy: Configuration.Proxy?) -> (host: String, port: Int) {
+    static func resolveAddress(host: WebURL.Host, port: Int, proxy: Configuration.Proxy?) -> (host: WebURL.Host, port: Int) {
         switch proxy {
         case .none:
             return (host, port)
@@ -883,7 +884,8 @@ extension HTTPClient.Configuration {
 }
 
 extension ChannelPipeline {
-    func syncAddProxyHandler(host: String, port: Int, authorization: HTTPClient.Authorization?) throws {
+
+    func syncAddProxyHandler(host: WebURL.Host, port: Int, authorization: HTTPClient.Authorization?) throws {
         let encoder = HTTPRequestEncoder()
         let decoder = ByteToMessageHandler(HTTPResponseDecoder(leftOverBytesStrategy: .forwardBytes))
         let handler = HTTPClientProxyHandler(host: host, port: port, authorization: authorization) { channel in
@@ -916,7 +918,7 @@ extension ChannelPipeline {
             let tlsConfiguration = tlsConfiguration ?? TLSConfiguration.forClient()
             let context = try NIOSSLContext(configuration: tlsConfiguration)
             try synchronousPipelineView.addHandler(
-                try NIOSSLClientHandler(context: context, serverHostname: (key.host.isIPAddress || key.host.isEmpty) ? nil : key.host),
+                try NIOSSLClientHandler(context: context, serverHostname: key.host.domainNameOrNil),
                 position: .before(eventsHandler)
             )
         } catch {
@@ -963,10 +965,8 @@ class TLSEventsHandler: ChannelInboundHandler, RemovableChannelHandler {
 public struct HTTPClientError: Error, Equatable, CustomStringConvertible {
     private enum Code: Equatable {
         case invalidURL
-        case emptyHost
         case missingSocketPath
         case alreadyShutdown
-        case emptyScheme
         case unsupportedScheme(String)
         case readTimeout
         case remoteConnectionClosed
@@ -998,14 +998,10 @@ public struct HTTPClientError: Error, Equatable, CustomStringConvertible {
 
     /// URL provided is invalid.
     public static let invalidURL = HTTPClientError(code: .invalidURL)
-    /// URL does not contain host.
-    public static let emptyHost = HTTPClientError(code: .emptyHost)
     /// URL does not contain a socketPath as a host for http(s)+unix shemes.
     public static let missingSocketPath = HTTPClientError(code: .missingSocketPath)
     /// Client is shutdown and cannot be used for new requests.
     public static let alreadyShutdown = HTTPClientError(code: .alreadyShutdown)
-    /// URL does not contain scheme.
-    public static let emptyScheme = HTTPClientError(code: .emptyScheme)
     /// Provided URL scheme is not supported, supported schemes are: `http` and `https`
     public static func unsupportedScheme(_ scheme: String) -> HTTPClientError { return HTTPClientError(code: .unsupportedScheme(scheme)) }
     /// Request timed out.
